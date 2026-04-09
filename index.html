@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Batalha de Gírias — SUB 20</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #0A0A0A; color: #F5F0E8; font-family: 'Inter', -apple-system, 'Helvetica Neue', sans-serif; -webkit-font-smoothing: antialiased; }
+  #app { min-height: 100vh; min-height: 100dvh; }
+  button { font-family: inherit; }
+  input { font-family: inherit; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes fadeIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script type="module">
+// ═══════════════════════════════════════════════════════════════
+//   FIREBASE CONFIG — COLE AQUI A SUA CONFIG DO FIREBASE
+//   (veja README.md para instruções de como obter)
+// ═══════════════════════════════════════════════════════════════
+const firebaseConfig = {
+ apiKey: "AIzaSyBEquJdbgmQzYivIFnDoJAnoebxmlfTExo",
+  authDomain: "batalha-girias-sub20.firebaseapp.com",
+  databaseURL: "https://batalha-girias-sub20-default-rtdb.firebaseio.com",
+  projectId: "batalha-girias-sub20",
+  storageBucket: "batalha-girias-sub20.firebasestorage.app",
+  messagingSenderId: "755070342151",
+  appId: "1:755070342151:web:35a0343b573c271f9b06a2"
+
+};
+// ═══════════════════════════════════════════════════════════════
+
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+import { getDatabase, ref, push, onValue, remove, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js';
+import { h, render } from 'https://esm.sh/preact@10.19.3';
+import { useState, useEffect, useRef } from 'https://esm.sh/preact@10.19.3/hooks';
+import htm from 'https://esm.sh/htm@3.1.1';
+
+const html = htm.bind(h);
+
+// Init Firebase
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const giriasRef = ref(db, 'girias');
+
+// Auto-cleanup: remove gírias antigas (mais de 6h)
+function cleanupOld(snapshot) {
+  const now = Date.now();
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
+  snapshot.forEach(child => {
+    const data = child.val();
+    if (data.ts && (now - data.ts) > SIX_HOURS) {
+      remove(ref(db, `girias/${child.key}`));
+    }
+  });
+}
+
+// ═══════ QR CODE COMPONENT ═══════
+function QRCode({ url, size = 240 }) {
+  const canvasRef = useRef(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (!url) return;
+    function renderQR() {
+      if (!canvasRef.current || !window.QRious) return;
+      try {
+        new window.QRious({
+          element: canvasRef.current,
+          value: url,
+          size: size,
+          background: '#FFFFFF',
+          foreground: '#000000',
+          level: 'M'
+        });
+      } catch { setError(true); }
+    }
+    if (window.QRious) { renderQR(); return; }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js';
+    script.onload = renderQR;
+    script.onerror = () => setError(true);
+    document.head.appendChild(script);
+  }, [url, size]);
+
+  if (error) {
+    return html`
+      <div style=${{ background: '#151515', border: '1px solid #333', borderRadius: 12, padding: '16px 20px', textAlign: 'center', maxWidth: 360 }}>
+        <div style=${{ color: '#888', fontSize: 13, marginBottom: 8 }}>QR indisponível. Compartilhe o link:</div>
+        <div style=${{ color: '#F5F0E8', fontSize: 12, wordBreak: 'break-all', background: '#0A0A0A', padding: '10px 14px', borderRadius: 8, userSelect: 'all' }}>${url}</div>
+      </div>
+    `;
+  }
+
+  return html`
+    <div style=${{ background: '#FFF', padding: 18, borderRadius: 16, display: 'inline-block', boxShadow: '0 0 60px rgba(245, 240, 232, 0.08)' }}>
+      <canvas ref=${canvasRef} width=${size} height=${size} style=${{ display: 'block', width: size + 'px', height: size + 'px' }}></canvas>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//   TELA DE ENVIO (celular — via QR)
+// ═══════════════════════════════════════════════════════════════
+function EnvioView() {
+  const [text, setText] = useState('');
+  const [team, setTeam] = useState(null);
+  const [status, setStatus] = useState('idle');
+  const [errMsg, setErrMsg] = useState('');
+  const inputRef = useRef(null);
+
+  const handleSubmit = async () => {
+    if (!text.trim() || !team) return;
+    setStatus('sending');
+    setErrMsg('');
+    try {
+      await push(giriasRef, {
+        text: text.trim(),
+        team: team,
+        ts: Date.now()
+      });
+      setStatus('sent');
+      setText('');
+      setTeam(null);
+      setTimeout(() => { setStatus('idle'); inputRef.current?.focus(); }, 2200);
+    } catch (err) {
+      setErrMsg(String(err?.message || err));
+      setStatus('error');
+      setTimeout(() => setStatus('idle'), 3500);
+    }
+  };
+
+  const canSubmit = text.trim().length > 0 && team !== null && status === 'idle';
+
+  return html`
+    <div style=${{
+      minHeight: '100dvh', background: '#0A0A0A',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      padding: '36px 20px 60px'
+    }}>
+      <div style=${{ fontSize: 11, letterSpacing: 4, color: '#666', textTransform: 'uppercase', marginBottom: 6, fontWeight: 600 }}>
+        SUB 20 · Batalha de Gírias
+      </div>
+      <h2 style=${{ fontSize: 22, fontWeight: 800, color: '#F5F0E8', margin: '0 0 4px', letterSpacing: -1, textAlign: 'center' }}>
+        ENVIE SUA GÍRIA,
+      </h2>
+      <h2 style=${{ fontSize: 22, fontWeight: 800, color: '#F5F0E8', margin: '0 0 30px', letterSpacing: -1, textAlign: 'center' }}>
+        EXPRESSÃO OU FRASE
+      </h2>
+
+      ${status === 'sent' ? html`
+        <div style=${{
+          background: '#1a2e1a', border: '2px solid #2d5a2d', borderRadius: 16,
+          padding: '40px 28px', textAlign: 'center', width: '100%', maxWidth: 340,
+          animation: 'fadeIn 0.3s ease'
+        }}>
+          <div style=${{ fontSize: 48, marginBottom: 12 }}>✅</div>
+          <div style=${{ color: '#7acc7a', fontSize: 22, fontWeight: 700 }}>Enviado!</div>
+          <div style=${{ color: '#5a8a5a', fontSize: 14, marginTop: 8 }}>Manda mais uma!</div>
+        </div>
+      ` : html`
+        <div style=${{ width: '100%', maxWidth: 340, display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div>
+            <label style=${{ color: '#888', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', display: 'block', marginBottom: 8, fontWeight: 600 }}>
+              Sua gíria, expressão ou frase
+            </label>
+            <input
+              ref=${inputRef}
+              type="text"
+              value=${text}
+              onInput=${e => setText(e.target.value)}
+              onKeyDown=${e => { if (e.key === 'Enter' && canSubmit) handleSubmit(); }}
+              placeholder='Ex: "Tá pianinho"'
+              maxLength=${120}
+              autoFocus
+              style=${{
+                width: '100%', padding: '14px 16px', background: '#151515',
+                border: '2px solid #333', borderRadius: 12, color: '#F5F0E8',
+                fontSize: 17, fontWeight: 600, outline: 'none'
+              }}
+            />
+            <div style=${{ textAlign: 'right', color: '#444', fontSize: 11, marginTop: 4 }}>${text.length}/120</div>
+          </div>
+
+          <div>
+            <label style=${{ color: '#888', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', display: 'block', marginBottom: 8, fontWeight: 600 }}>
+              Seu time
+            </label>
+            <div style=${{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              ${['FLOW', 'LIVRES'].map(t => html`
+                <button key=${t} onClick=${() => setTeam(t)} style=${{
+                  padding: 16, borderRadius: 12, fontSize: 16, fontWeight: 800,
+                  letterSpacing: 2, cursor: 'pointer', transition: 'all .15s',
+                  border: team === t ? '2px solid #F5F0E8' : '2px solid #333',
+                  background: team === t ? '#F5F0E8' : 'transparent',
+                  color: team === t ? '#0A0A0A' : '#888'
+                }}>${t}</button>
+              `)}
+            </div>
+          </div>
+
+          <button onClick=${handleSubmit} disabled=${!canSubmit} style=${{
+            padding: 18, background: canSubmit ? '#F5F0E8' : '#222',
+            color: canSubmit ? '#0A0A0A' : '#555', border: 'none', borderRadius: 12,
+            fontSize: 16, fontWeight: 800, letterSpacing: 2, textTransform: 'uppercase',
+            cursor: canSubmit ? 'pointer' : 'not-allowed',
+            opacity: status === 'sending' ? .5 : 1
+          }}>
+            ${status === 'sending' ? 'ENVIANDO...' : 'ENVIAR →'}
+          </button>
+
+          ${status === 'error' && html`
+            <div style=${{ background: '#2a1111', border: '1px solid #662222', borderRadius: 10, padding: '12px 16px', color: '#ff8888', fontSize: 13, textAlign: 'center' }}>
+              Erro: ${errMsg || 'tente novamente'}
+            </div>
+          `}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//   TELÃO (tela principal — projetor)
+// ═══════════════════════════════════════════════════════════════
+function TelaoView() {
+  const [girias, setGirias] = useState([]);
+  const [phase, setPhase] = useState('lobby'); // lobby | playing | timesup | done
+  const [idx, setIdx] = useState(0);
+  const [countdown, setCountdown] = useState(30);
+  const [connected, setConnected] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const timerRef = useRef(null);
+
+  // URL do QR (mesma origem + ?enviar=1)
+  const qrUrl = (() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('enviar', '1');
+      return u.toString();
+    } catch { return window.location.href + '?enviar=1'; }
+  })();
+
+  // Ouvir Firebase em tempo real
+  useEffect(() => {
+    const unsub = onValue(giriasRef, (snapshot) => {
+      const list = [];
+      snapshot.forEach(child => {
+        list.push({ id: child.key, ...child.val() });
+      });
+      list.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      setGirias(list);
+      setConnected(true);
+      cleanupOld(snapshot);
+    }, (error) => {
+      console.error('Firebase error:', error);
+      setConnected(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // Timer 30s
+  useEffect(() => {
+    clearInterval(timerRef.current);
+    if (phase === 'playing') {
+      setCountdown(30);
+      timerRef.current = setInterval(() => {
+        setCountdown(p => {
+          if (p <= 1) { clearInterval(timerRef.current); setPhase('timesup'); return 0; }
+          return p - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [phase, idx]);
+
+  // Teclado
+  useEffect(() => {
+    const handler = (e) => {
+      if (phase === 'lobby' && girias.length > 0 && (e.key === ' ' || e.key === 'Enter')) {
+        e.preventDefault();
+        setIdx(0);
+        setPhase('playing');
+      } else if (phase === 'timesup') {
+        e.preventDefault();
+        if (idx + 1 >= girias.length) {
+          setPhase('done');
+        } else {
+          setIdx(i => i + 1);
+          setPhase('playing');
+        }
+      } else if (phase === 'done' && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        handleBackToLobby();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [phase, idx, girias.length]);
+
+  const handleBackToLobby = () => {
+    setIdx(0);
+    setPhase('lobby');
+  };
+
+  const handleClearAll = async () => {
+    try { await remove(giriasRef); } catch (e) { console.error(e); }
+    setShowResetConfirm(false);
+    setIdx(0);
+    setPhase('lobby');
+  };
+
+  const current = girias[idx];
+
+  // ── LOBBY ──
+  if (phase === 'lobby') {
+    return html`
+      <div style=${{
+        minHeight: '100dvh', background: '#0A0A0A',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        padding: 40, gap: 24, position: 'relative'
+      }}>
+        <div style=${{ fontSize: 13, letterSpacing: 6, color: '#666', textTransform: 'uppercase', fontWeight: 600 }}>
+          SUB 20 apresenta
+        </div>
+        <h1 style=${{
+          fontSize: 'clamp(52px, 9vw, 110px)', fontWeight: 900, color: '#F5F0E8',
+          letterSpacing: -3, lineHeight: .92, textAlign: 'center', margin: 0
+        }}>BATALHA<br/>DE GÍRIAS</h1>
+
+        <p style=${{ color: '#888', fontSize: 'clamp(15px, 1.6vw, 20px)', textAlign: 'center', margin: '4px 0 0', maxWidth: 600, lineHeight: 1.4 }}>
+          Escaneie o QR e envie sua gíria, expressão ou frase
+        </p>
+
+        <${QRCode} url=${qrUrl} size=${240} />
+
+        <div style=${{
+          display: 'flex', alignItems: 'center', gap: 18,
+          background: '#151515', padding: '18px 32px', borderRadius: 16, marginTop: 4,
+          border: '1px solid #222'
+        }}>
+          <div style=${{ fontSize: 48, fontWeight: 900, color: '#F5F0E8', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+            ${girias.length}
+          </div>
+          <div style=${{ color: '#888', fontSize: 14, lineHeight: 1.4 }}>
+            ${girias.length === 1 ? 'gíria, expressão ou frase' : 'gírias, expressões e frases'}<br/>
+            ${girias.length === 1 ? 'enviada' : 'enviadas'}
+          </div>
+        </div>
+
+        ${!connected && html`
+          <div style=${{ background: '#2a1111', border: '1px solid #662222', borderRadius: 10, padding: '10px 16px', color: '#ff8888', fontSize: 12, maxWidth: 400, textAlign: 'center' }}>
+            ⚠ Sem conexão com o Firebase. Verifique a config no index.html.
+          </div>
+        `}
+
+        ${girias.length > 0 ? html`
+          <button onClick=${() => { setIdx(0); setPhase('playing'); }} style=${{
+            padding: '20px 56px', background: '#F5F0E8', border: 'none',
+            color: '#0A0A0A', fontSize: 18, fontWeight: 800, borderRadius: 14,
+            cursor: 'pointer', letterSpacing: 2, textTransform: 'uppercase',
+            marginTop: 8, boxShadow: '0 8px 32px rgba(245, 240, 232, 0.15)'
+          }}>
+            COMEÇAR ▶
+          </button>
+        ` : html`
+          <div style=${{ color: '#555', fontSize: 14, marginTop: 8, textAlign: 'center', animation: 'pulse 2s infinite' }}>
+            Aguardando envios...
+          </div>
+        `}
+
+        ${girias.length > 0 && html`
+          <button onClick=${() => setShowResetConfirm(true)} style=${{
+            padding: '8px 18px', background: 'transparent', border: '1px solid #331111',
+            color: '#773333', borderRadius: 8, cursor: 'pointer', fontSize: 11
+          }}>Limpar tudo</button>
+        `}
+
+        ${showResetConfirm && html`
+          <div style=${{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100
+          }}>
+            <div style=${{ background: '#151515', border: '1px solid #333', borderRadius: 16, padding: 32, maxWidth: 360, textAlign: 'center' }}>
+              <div style=${{ color: '#F5F0E8', fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Limpar todas as gírias?</div>
+              <div style=${{ color: '#888', fontSize: 13, marginBottom: 24 }}>Esta ação não pode ser desfeita.</div>
+              <div style=${{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                <button onClick=${() => setShowResetConfirm(false)} style=${{ padding: '12px 24px', background: 'transparent', border: '1px solid #333', color: '#888', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Cancelar</button>
+                <button onClick=${handleClearAll} style=${{ padding: '12px 24px', background: '#B91C1C', border: 'none', color: '#FFF', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>Sim, limpar</button>
+              </div>
+            </div>
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  // ── DONE ──
+  if (phase === 'done') {
+    return html`
+      <div style=${{
+        minHeight: '100dvh', background: '#0A0A0A',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 22
+      }}>
+        <div style=${{ fontSize: 72 }}>🏆</div>
+        <h1 style=${{ fontSize: 'clamp(56px, 8vw, 88px)', fontWeight: 900, color: '#F5F0E8', letterSpacing: -2, margin: 0 }}>FIM!</h1>
+        <p style=${{ color: '#888', fontSize: 18 }}>${girias.length} no total</p>
+        <div style=${{ display: 'flex', gap: 12, marginTop: 16 }}>
+          <button onClick=${handleBackToLobby} style=${{
+            padding: '14px 32px', background: '#F5F0E8', border: 'none', color: '#0A0A0A',
+            borderRadius: 12, cursor: 'pointer', fontSize: 14, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase'
+          }}>Voltar ao início</button>
+        </div>
+        <p style=${{ color: '#444', fontSize: 12, marginTop: 12 }}>
+          Aperte <span style=${{ color: '#F5F0E8', fontWeight: 700 }}>R</span> para recomeçar
+        </p>
+      </div>
+    `;
+  }
+
+  // ── GAME ──
+  const isFlow = current?.team === 'FLOW';
+  const bg = phase === 'timesup' ? '#B91C1C' : '#0A0A0A';
+  const teamColor = isFlow ? '#60A5FA' : '#FBBF24';
+  const countdownColor = phase === 'timesup' ? '#FFF' : (countdown <= 5 ? '#EF4444' : '#F5F0E8');
+
+  return html`
+    <div style=${{
+      minHeight: '100dvh', background: bg,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      padding: 40, transition: 'background .4s', position: 'relative'
+    }}>
+      <div style=${{
+        position: 'absolute', top: 24, left: 40, right: 40,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+      }}>
+        <div style=${{ fontSize: 14, letterSpacing: 3, color: phase === 'timesup' ? '#FCA5A5' : '#666', textTransform: 'uppercase', fontWeight: 700 }}>
+          Enviada pelo <span style=${{ color: phase === 'timesup' ? '#FFF' : teamColor }}>${current?.team}</span>
+        </div>
+        <div style=${{ fontSize: 14, color: phase === 'timesup' ? '#FCA5A5' : '#555', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+          ${idx + 1} / ${girias.length}
+        </div>
+      </div>
+
+      <div style=${{
+        fontSize: 'clamp(44px, 8vw, 110px)', fontWeight: 900,
+        color: phase === 'timesup' ? '#FFF' : '#F5F0E8',
+        textAlign: 'center', lineHeight: 1.1, letterSpacing: -2,
+        maxWidth: '90vw', wordBreak: 'break-word', padding: '0 20px'
+      }}>"${current?.text}"</div>
+
+      ${phase === 'playing' && html`
+        <div style=${{ marginTop: 50, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+          <div style=${{
+            fontSize: 'clamp(80px, 13vw, 150px)', fontWeight: 900,
+            color: countdownColor, fontVariantNumeric: 'tabular-nums', lineHeight: 1,
+            transition: 'color .3s'
+          }}>${countdown}</div>
+          <div style=${{ width: 320, height: 5, background: '#222', borderRadius: 3, marginTop: 12, overflow: 'hidden' }}>
+            <div style=${{
+              height: '100%', borderRadius: 3,
+              background: countdown <= 5 ? '#EF4444' : '#F5F0E8',
+              width: `${(countdown / 30) * 100}%`,
+              transition: 'width 1s linear, background .3s'
+            }}></div>
+          </div>
+        </div>
+      `}
+
+      ${phase === 'timesup' && html`
+        <div style=${{ marginTop: 50, textAlign: 'center' }}>
+          <div style=${{ fontSize: 'clamp(28px, 4vw, 48px)', color: '#FFF', fontWeight: 900, marginBottom: 16, letterSpacing: 4 }}>
+            ⏰ TEMPO!
+          </div>
+          <div style=${{ fontSize: 16, color: '#FEE2E2', fontWeight: 600, animation: 'pulse 1.5s infinite', letterSpacing: 2 }}>
+            APERTE QUALQUER TECLA →
+          </div>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//   APP — roteamento por URL
+// ═══════════════════════════════════════════════════════════════
+function App() {
+  const params = new URLSearchParams(window.location.search);
+  const isEnvio = params.has('enviar');
+  return isEnvio ? html`<${EnvioView} />` : html`<${TelaoView} />`;
+}
+
+render(html`<${App} />`, document.getElementById('app'));
+</script>
+</body>
+</html>
